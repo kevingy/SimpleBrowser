@@ -1,6 +1,6 @@
 ﻿// -----------------------------------------------------------------------
 // <copyright file="WebRequestWrapper.cs" company="SimpleBrowser">
-// Copyright © 2010 - 2019, Nathan Ridley and the SimpleBrowser contributors.
+// Copyright © 2010 - 2020, Nathan Ridley and the SimpleBrowser contributors.
 // See https://github.com/SimpleBrowserDotNet/SimpleBrowser/blob/master/readme.md
 // </copyright>
 // -----------------------------------------------------------------------
@@ -14,7 +14,7 @@ namespace SimpleBrowser.Network
 
     internal class WebRequestWrapper : IHttpWebRequest
     {
-        private static int[] allowedRedirectStatusCodes = { 300, 301, 302, 303, 307, 308 };
+        private static readonly int[] allowedRedirectStatusCodes = { 300, 301, 302, 303, 307, 308 };
 
         private readonly HttpWebRequest webRequest = null;
 
@@ -22,8 +22,6 @@ namespace SimpleBrowser.Network
         {
             this.webRequest = (HttpWebRequest)HttpWebRequest.Create(url);
         }
-
-        #region IHttpWebRequest Members
 
         public Stream GetRequestStream()
         {
@@ -226,7 +224,5 @@ namespace SimpleBrowser.Network
                 this.webRequest.Host = value;
             }
         }
-
-        #endregion IHttpWebRequest Members
     }
 }

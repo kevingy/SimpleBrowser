@@ -1,6 +1,6 @@
 ﻿// -----------------------------------------------------------------------
 // <copyright file="Helper.cs" company="SimpleBrowser">
-// Copyright © 2010 - 2019, Nathan Ridley and the SimpleBrowser contributors.
+// Copyright © 2010 - 2020, Nathan Ridley and the SimpleBrowser contributors.
 // See https://github.com/SimpleBrowserDotNet/SimpleBrowser/blob/master/readme.md
 // </copyright>
 // -----------------------------------------------------------------------
@@ -43,8 +43,6 @@ namespace SimpleBrowser.UnitTests
 
             public string ResponseContent { get; set; }
 
-            #region IWebRequestFactory Members
-
             public IHttpWebRequest GetWebRequest(Uri url)
             {
                 Mock<IHttpWebRequest> mock = new Mock<IHttpWebRequest>();
@@ -64,8 +62,6 @@ namespace SimpleBrowser.UnitTests
                 mock.Setup(m => m.GetRequestStream()).Returns(new MemoryStream(new byte[2000000]));
                 return mock.Object;
             }
-
-            #endregion IWebRequestFactory Members
         }
 
         internal static IWebRequestFactory GetMoviesRequestMocker()
@@ -75,8 +71,6 @@ namespace SimpleBrowser.UnitTests
 
         private class MoviesRequestMocker : IWebRequestFactory
         {
-            #region IWebRequestFactory Members
-
             public IHttpWebRequest GetWebRequest(Uri url)
             {
                 Mock<IHttpWebRequest> mock = new Mock<IHttpWebRequest>();
@@ -87,6 +81,8 @@ namespace SimpleBrowser.UnitTests
                         Mock<IHttpWebResponse> mockResponse = new Mock<IHttpWebResponse>();
                         mockResponse.SetupAllProperties();
                         mockResponse.SetupProperty(m => m.Headers, new WebHeaderCollection());
+                        mockResponse.SetupProperty(m => m.ContentType, "text/html");
+                        mockResponse.SetupProperty(m => m.ContentEncoding, Encoding.UTF8);
 
                         byte[] responseContent = new byte[0];
                         if (mock.Object.Method == "GET")
@@ -116,8 +112,6 @@ namespace SimpleBrowser.UnitTests
                 mock.Setup(m => m.GetRequestStream()).Returns(new MemoryStream(new byte[20000]));
                 return mock.Object;
             }
-
-            #endregion IWebRequestFactory Members
         }
 
         internal static IWebRequestFactory GetIFramesMock()
@@ -137,6 +131,8 @@ namespace SimpleBrowser.UnitTests
                         Mock<IHttpWebResponse> mockResponse = new Mock<IHttpWebResponse>();
                         mockResponse.SetupAllProperties();
                         mockResponse.SetupProperty(m => m.Headers, new WebHeaderCollection());
+                        mockResponse.SetupProperty(m => m.ContentType, "text/html");
+                        mockResponse.SetupProperty(m => m.ContentEncoding, Encoding.UTF8);
 
                         byte[] responseContent = new byte[0];
                         if (mock.Object.Method == "GET")
@@ -176,6 +172,8 @@ namespace SimpleBrowser.UnitTests
                         Mock<IHttpWebResponse> mockResponse = new Mock<IHttpWebResponse>();
                         mockResponse.SetupAllProperties();
                         mockResponse.SetupProperty(m => m.Headers, new WebHeaderCollection());
+                        mockResponse.SetupProperty(m => m.ContentType, "text/html");
+                        mockResponse.SetupProperty(m => m.ContentEncoding, Encoding.UTF8);
 
                         byte[] responseContent = new byte[0];
                         if (mock.Object.Method == "GET")

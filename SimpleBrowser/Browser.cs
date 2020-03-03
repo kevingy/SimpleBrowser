@@ -1,6 +1,6 @@
 ﻿// -----------------------------------------------------------------------
 // <copyright file="Browser.cs" company="SimpleBrowser">
-// Copyright © 2010 - 2019, Nathan Ridley and the SimpleBrowser contributors.
+// Copyright © 2010 - 2020, Nathan Ridley and the SimpleBrowser contributors.
 // See https://github.com/SimpleBrowserDotNet/SimpleBrowser/blob/master/readme.md
 // </copyright>
 // -----------------------------------------------------------------------
@@ -10,6 +10,8 @@ namespace SimpleBrowser
     using System;
     using System.Collections.Generic;
     using System.Collections.Specialized;
+    using System.Composition.Convention;
+    using System.Composition.Hosting;
     using System.Diagnostics;
     using System.Globalization;
     using System.IO;
@@ -20,6 +22,7 @@ namespace SimpleBrowser
     using System.Text.RegularExpressions;
     using System.Web;
     using System.Xml.Linq;
+    using SimpleBrowser.ContentHandlers;
     using SimpleBrowser.Internal;
     using SimpleBrowser.Network;
     using SimpleBrowser.Parser;
@@ -48,13 +51,15 @@ namespace SimpleBrowser
         private readonly Dictionary<string, BasicAuthenticationToken> _basicAuthenticationTokens;
         private NameValueCollection _navigationAttributes = null;
 
-        public Encoding ResponseEncoding { get; set; }
+        public static Encoding ResponseEncoding { get; set; }
+
+        public static IEnumerable<IContentHandler> contentHandlers = new List<IContentHandler>();
 
         static Browser()
         {
             // Chrome no longer supports SSL. Chrome supports TLS 1.0, 1.1, 1.2, and 1.3 (Experimental).
             // .NET Standard 2.1 does not support TLS 1.3.
-            // This sets the default SimpleBrowser security protocol to TLS 1.0, 1.1, or 1.2. 
+            // This sets the default SimpleBrowser security protocol to TLS 1.0, 1.1, or 1.2.
             // This site shows what security protocols are supported by any given browser: https://www.ssllabs.com/ssltest/viewMyClient.html
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls12;
 
@@ -64,6 +69,33 @@ namespace SimpleBrowser
             }
 
             ServicePointManager.ServerCertificateValidationCallback = delegate { return true; };
+
+            // Set up Managed Extensibility Framework for content handler plugins.
+            var path = Path.Combine(AppContext.BaseDirectory, "Plugins");
+            var assemblies = new HashSet<Assembly>
+            {
+                Assembly.GetExecutingAssembly()
+            };
+
+            if (Directory.Exists(path))
+            {
+                assemblies.UnionWith(Directory.GetFiles(path, "*.dll").Select(Assembly.LoadFile));
+            }
+
+            var conventions = new ConventionBuilder();
+
+            conventions
+                .ForTypesDerivedFrom<IContentHandler>()
+                .Export<IContentHandler>()
+                .Shared();
+
+            var configuration = new ContainerConfiguration();
+
+            configuration.WithAssemblies(assemblies, conventions);
+            using (var container = configuration.CreateContainer())
+            {
+                contentHandlers = container.GetExports<IContentHandler>();
+            }
         }
 
         public Browser(IWebRequestFactory requestFactory = null, string name = null, List<Browser> context = null)
@@ -111,6 +143,39 @@ namespace SimpleBrowser
             set
             {
                 ServicePointManager.SecurityProtocol = value;
+            }
+        }
+
+        private static string downloadDirectory = Directory.GetCurrentDirectory();
+        public static string DownloadDirectory
+        {
+            get
+            {
+                return downloadDirectory;
+            }
+
+            set
+            {
+                try
+                {
+                    Path.GetFullPath(value);
+                }
+                catch
+                {
+                    throw;
+                }
+
+                if (!Path.IsPathRooted(value))
+                {
+                    throw new InvalidDataException("The path must be rooted and absolute.");
+                }
+
+                if (!Directory.Exists(value))
+                {
+                    throw new DirectoryNotFoundException();
+                }
+
+                downloadDirectory = value;
             }
         }
 
@@ -835,20 +900,22 @@ namespace SimpleBrowser
 
         internal bool DoRequest(Uri uri, string method, NameValueCollection userVariables, string postData, string contentType, string encodingType, int timeoutMilliseconds)
         {
-            string html;
+            string content;
             string referer = null;
 
             if (uri.IsFile)
             {
-                StreamReader reader = new StreamReader(uri.AbsolutePath);
-                html = reader.ReadToEnd();
-                reader.Close();
+                using (StreamReader reader = new StreamReader(uri.AbsolutePath))
+                {
+                    content = reader.ReadToEnd();
+                    reader.Close();
+                }
 
                 _lastRequestLog = new HttpRequestLog
                 {
                     Method = "GET",
                     Url = uri,
-                    Text = html
+                    Text = content,
                 };
             }
             else
@@ -866,11 +933,11 @@ namespace SimpleBrowser
                     }
 
                     handle3xxRedirect = false;
-                    IHttpWebRequest req = null;
+                    IHttpWebRequest request = null;
 
                     try
                     {
-                        req = PrepareRequestObject(uri, method, contentType, timeoutMilliseconds);
+                        request = PrepareRequestObject(uri, method, contentType, timeoutMilliseconds);
                     }
                     catch (NotSupportedException)
                     {
@@ -882,17 +949,17 @@ namespace SimpleBrowser
                     {
                         if (header.StartsWith("host:", StringComparison.OrdinalIgnoreCase))
                         {
-                            req.Host = header.Split(':')[1];
+                            request.Host = header.Split(':')[1];
                         }
                         else
                         {
-                            req.Headers.Add(header);
+                            request.Headers.Add(header);
                         }
                     }
 
                     if (!string.IsNullOrEmpty(encodingType))
                     {
-                        req.Headers.Add(HttpRequestHeader.ContentEncoding, encodingType);
+                        request.Headers.Add(HttpRequestHeader.ContentEncoding, encodingType);
                     }
 
                     // Remove all expired basic authentication tokens
@@ -906,13 +973,13 @@ namespace SimpleBrowser
                     // If an authentication token exists for the domain, add the authorization header.
                     foreach (var token in _basicAuthenticationTokens.Values)
                     {
-                        if (req.Host.Contains(token.Domain))
+                        if (request.Host.Contains(token.Domain))
                         {
                             // Extend the expiration.
                             token.UpdateExpiration();
 
                             // Add the authentication header.
-                            req.Headers.Add(string.Format(
+                            request.Headers.Add(string.Format(
                                 "Authorization: Basic {0}",
                                 token.Token));
                         }
@@ -936,8 +1003,8 @@ namespace SimpleBrowser
                         {
                             postBody = StringUtil.MakeQueryString(userVariables);
                             byte[] data = Encoding.GetEncoding(28591).GetBytes(postBody);
-                            req.ContentLength = data.Length;
-                            using (Stream stream = req.GetRequestStream())
+                            request.ContentLength = data.Length;
+                            using (Stream stream = request.GetRequestStream())
                             {
                                 stream.Write(data, 0, data.Length);
                             }
@@ -948,7 +1015,7 @@ namespace SimpleBrowser
                                 uri.Scheme + "://" + uri.Host + ":" + uri.Port + uri.AbsolutePath
                                 + ((userVariables.Count > 0) ? "?" + StringUtil.MakeQueryString(userVariables) : "")
                                 );
-                            req = PrepareRequestObject(uri, method, contentType, timeoutMilliseconds);
+                            request = PrepareRequestObject(uri, method, contentType, timeoutMilliseconds);
                         }
                     }
                     else if (postData != null)
@@ -966,18 +1033,18 @@ namespace SimpleBrowser
                         // update the encoding being sent with a form submission with a hidden input named _charset_
                         // in InputElement.cs.
                         byte[] data = Encoding.GetEncoding(28591).GetBytes(postData);
-                        req.ContentLength = data.Length;
-                        using (Stream stream = req.GetRequestStream())
+                        request.ContentLength = data.Length;
+                        using (Stream stream = request.GetRequestStream())
                         {
                             stream.Write(data, 0, data.Length);
                         }
                     }
 
-                    referer = req.Referer;
+                    referer = request.Referer;
 
                     if (contentType != null)
                     {
-                        req.ContentType = contentType;
+                        request.ContentType = contentType;
                     }
 
                     _lastRequestLog = new HttpRequestLog
@@ -985,45 +1052,28 @@ namespace SimpleBrowser
                         Method = method,
                         PostData = userVariables,
                         PostBody = postBody,
-                        RequestHeaders = req.Headers,
+                        RequestHeaders = request.Headers,
                         Url = uri,
-                        Address = req.Address,
-                        Host = req.Host
+                        Address = request.Address,
+                        Host = request.Host
                     };
 
                     try
                     {
-                        using (IHttpWebResponse response = req.GetResponse())
+                        using (IHttpWebResponse response = request.GetResponse())
                         {
-                            Encoding responseEncoding = ResponseEncoding ?? Encoding.UTF8; //default
-                            if (ResponseEncoding == null &&
-                                ((response.Headers.AllKeys.Contains("Content-Type", StringComparer.OrdinalIgnoreCase) &&
-                                 response.Headers["Content-Type"].IndexOf("charset", 0, StringComparison.OrdinalIgnoreCase) > -1) ||
-                                 !string.IsNullOrWhiteSpace(response.CharacterSet)))
+                            IContentHandler contentHandler = contentHandlers.Where(handler => handler.ContentTypes.Contains(response.ContentType)).FirstOrDefault();
+                            if (contentHandler == null)
                             {
-                                try
-                                {
-                                    responseEncoding = Encoding.GetEncoding(response.CharacterSet);
-                                }
-                                catch (ArgumentException)
-                                {
-                                    responseEncoding = Encoding.UTF8; // try using utf8
-                                }
+                                contentHandler = new DefaultContentHandler();
                             }
 
-                            //ensure the stream is disposed
-                            using (Stream rs = response.GetResponseStream())
-                            {
-                                using (StreamReader reader = new StreamReader(rs, responseEncoding))
-                                {
-                                    html = reader.ReadToEnd();
-                                }
-                            }
+                            content = contentHandler.HandleResponse(response);
 
                             _doc = null;
                             _includeFormValues = null;
 
-                            _lastRequestLog.Text = html;
+                            _lastRequestLog.Text = content;
                             _lastRequestLog.ResponseHeaders = response.Headers;
                             _lastRequestLog.ResponseCode = (int)response.StatusCode;
 
@@ -1071,11 +1121,11 @@ namespace SimpleBrowser
                             {
                                 using (StreamReader reader = new StreamReader(rs))
                                 {
-                                    html = reader.ReadToEnd();
+                                    content = reader.ReadToEnd();
                                 }
                             }
 
-                            _lastRequestLog.Text = html;
+                            _lastRequestLog.Text = content;
                             _lastRequestLog.ResponseCode = (int)((HttpWebResponse)ex.Response).StatusCode;
                         }
 
@@ -1111,7 +1161,7 @@ namespace SimpleBrowser
             this.AddNavigationState(
                 new NavigationState()
                 {
-                    Html = html,
+                    Html = content,
                     Url = uri,
                     ContentType = contentType,
                     Referer = string.IsNullOrEmpty(referer) ? null : new Uri(Uri.UnescapeDataString(referer))
